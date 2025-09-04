@@ -21,11 +21,11 @@ A practical, copy‑paste guide to set up a small HA web cluster on Ubuntu. We�
 
 | Role             | Hostname (suggested) | Host‑Only IP       |
 | ---------------- | -------------------- | ------------------ |
-| Tomcat #1        | `app1`               | `192.168.56.10/24` |
-| Tomcat #2        | `app2`               | `192.168.56.20/24` |
-| LB #1 (MASTER)   | `lb1`                | `192.168.56.11/24` |
-| LB #2 (BACKUP)   | `lb2`                | `192.168.56.12/24` |
-| VIP (Keepalived) | `vip`                | `192.168.56.30/24` |
+| Tomcat #1        | `UbuntuServer1`      | `192.168.10.10/24` |
+| Tomcat #2        | `UbuntuServer2`      | `192.168.10.20/24` |
+| LB #1 (MASTER)   | `UbuntuServer1`      | `192.168.10.10/24` |
+| LB #2 (BACKUP)   | `UbuntuServer2`      | `192.168.10.20/24` |
+| VIP (Keepalived) | N/A                  | `192.168.10.100/24` |
 
 **Network adapters per VM:**
 
@@ -34,13 +34,13 @@ A practical, copy‑paste guide to set up a small HA web cluster on Ubuntu. We�
 
 ```mermaid
 flowchart LR
-  Client -->|HTTP/HTTPS| VIP((192.168.56.30))
+  Client -->|HTTP/HTTPS| VIP((192.168.10.100))
   VIP --> LB1[Squid + Keepalived]
   VIP --> LB2[Squid + Keepalived]
-  LB1 -->|8080/8443| App1[Tomcat #1]
-  LB1 -->|8080/8443| App2[Tomcat #2]
-  LB2 -->|8080/8443| App1
-  LB2 -->|8080/8443| App2
+  LB1 -->|8080/8443| UbuntuServer1[Tomcat #1]
+  LB1 -->|8080/8443| UbuntuServer2[Tomcat #2]
+  LB2 -->|8080/8443| UbuntuServer1
+  LB2 -->|8080/8443| UbuntuServer2
 ```
 
 ---
@@ -69,7 +69,7 @@ network:
   renderer: networkd
   ethernets:
     enp0s8:
-      addresses: [192.168.56.10/24]   # app1. Use .20 on app2, .11 on lb1, .12 on lb2
+      addresses: [192.168.10.10/24]   # UbuntuServer1. Use .20 on UbuntuServer2
       nameservers:
         addresses: [1.1.1.1,8.8.8.8]
 ```
@@ -104,7 +104,7 @@ We’ll enable HTTP (8080) and HTTPS (8443) and add a minimal page that shows wh
 
 ### 3.1 Create a tiny test page
 
-**On app1:**
+**On UbuntuServer1:**
 
 ```bash
 sudo tee /var/lib/tomcat9/webapps/ROOT/index.jsp >/dev/null <<'EOF'
@@ -118,7 +118,7 @@ EOF
 sudo chown tomcat:tomcat /var/lib/tomcat9/webapps/ROOT/index.jsp
 ```
 
-**On app2**, do the same but change the heading to `NODE-2`.
+**On UbuntuServer2**, do the same but change the heading to `NODE-2`.
 
 ### 3.2 Enable Tomcat HTTPS (8443)
 
@@ -178,30 +178,30 @@ sudo systemctl restart squid
 
 ## Step 5 — Configure Squid (reverse proxy + load balancing)
 
-Edit `/etc/squid/squid.conf` on **lb1** and **lb2** (identical configs):
+Edit `/etc/squid/squid.conf` on **UbuntuServer1** and **UbuntuServer2** (identical configs):
 
 ```conf
 # === ACLs ===
 acl all src all
-acl backend dst 192.168.56.10 192.168.56.20
+acl backend dst 192.168.10.10 192.168.10.20
 acl redir proto HTTP
 http_access allow all
 
 # === Backends: HTTP (8080) ===
-cache_peer 192.168.56.10 parent 8080 0 no-query no-digest originserver \
+cache_peer 192.168.10.10 parent 8080 0 no-query no-digest originserver \
  login=PASS sourcehash name=backend1
 cache_peer_access backend1 allow backend redir
 
-cache_peer 192.168.56.20 parent 8080 0 no-query no-digest originserver \
+cache_peer 192.168.10.20 parent 8080 0 no-query no-digest originserver \
  login=PASS sourcehash name=backend2
 cache_peer_access backend2 allow backend redir
 
 # === Backends: HTTPS (8443) ===
-cache_peer 192.168.56.10 parent 8443 0 no-query no-digest originserver \
+cache_peer 192.168.10.10 parent 8443 0 no-query no-digest originserver \
  ssl sslflags=DONT_VERIFY_PEER login=PASS sourcehash name=backend1_ssl
 cache_peer_access backend1_ssl allow backend !redir
 
-cache_peer 192.168.56.20 parent 8443 0 no-query no-digest originserver \
+cache_peer 192.168.10.20 parent 8443 0 no-query no-digest originserver \
  ssl sslflags=DONT_VERIFY_PEER login=PASS sourcehash name=backend2_ssl
 cache_peer_access backend2_ssl allow backend !redir
 
@@ -214,9 +214,9 @@ memory_pools off
 
 # === Front-facing ports ===
 # Default site helps Squid choose a Host header for acceleration
-http_port 80 accel defaultsite=192.168.56.30
+http_port 80 accel defaultsite=192.168.10.100
 # IMPORTANT: keep on a single line
-https_port 443 accel cert=/etc/ssl/certs/ssl-cert-snakeoil.pem key=/etc/ssl/private/ssl-cert-snakeoil.key defaultsite=192.168.56.30
+https_port 443 accel cert=/etc/ssl/certs/ssl-cert-snakeoil.pem key=/etc/ssl/private/ssl-cert-snakeoil.key defaultsite=192.168.10.100
 ```
 
 Validate & restart:
@@ -235,7 +235,7 @@ sudo systemctl enable squid
 
 Find your Host‑Only interface name (likely `enp0s8`).
 
-### 6.1 MASTER (`lb1`) — `/etc/keepalived/keepalived.conf`
+### 6.1 MASTER (`UbuntuServer1`) — `/etc/keepalived/keepalived.conf`
 
 ```conf
 vrrp_script chk_squid {
@@ -256,7 +256,7 @@ vrrp_instance VI_1 {
         auth_pass mypassword
     }
     virtual_ipaddress {
-        192.168.56.30/24
+        192.168.10.100/24
     }
     track_script {
         chk_squid
@@ -264,7 +264,7 @@ vrrp_instance VI_1 {
 }
 ```
 
-### 6.2 BACKUP (`lb2`) — `/etc/keepalived/keepalived.conf`
+### 6.2 BACKUP (`UbuntuServer2`) — `/etc/keepalived/keepalived.conf`
 
 ```conf
 vrrp_script chk_squid {
@@ -285,7 +285,7 @@ vrrp_instance VI_1 {
         auth_pass mypassword
     }
     virtual_ipaddress {
-        192.168.56.30/24
+        192.168.10.100/24
     }
     track_script {
         chk_squid
@@ -300,7 +300,7 @@ sudo systemctl enable keepalived
 sudo systemctl restart keepalived
 ```
 
-> The VIP `192.168.56.30` should appear on `lb1` (MASTER). If Squid dies or `lb1` goes down, `lb2` will take over.
+> The VIP `192.168.10.100` should appear on `UbuntuServer1` (MASTER). If Squid dies or `UbuntuServer1` goes down, `UbuntuServer2` will take over.
 
 ---
 
@@ -321,8 +321,8 @@ From your host or any client on the Host‑Only network:
 
 ```bash
 # VIP responds over HTTP & HTTPS
-curl -I http://192.168.56.30/
-curl -kI https://192.168.56.30/
+curl -I http://192.168.10.100/
+curl -kI https://192.168.10.100/
 
 # Hit it multiple times — you should see NODE-1 and NODE-2 in the body alternating
 ```
@@ -333,7 +333,7 @@ curl -kI https://192.168.56.30/
 # On lb1 (MASTER):
 sudo systemctl stop squid
 # On lb2, watch the VIP appear on enp0s8 within a few seconds
-ip -br a | grep 192.168.56.30
+ip -br a | grep 192.168.10.100
 
 # Bring lb1 back:
 sudo systemctl start squid
@@ -397,31 +397,31 @@ sudo tcpdump -ni enp0s8 vrrp
 
 ```conf
 acl all src all
-acl backend dst 192.168.56.10 192.168.56.20
+acl backend dst 192.168.10.10 192.168.10.20
 acl redir proto HTTP
 http_access allow all
 
-cache_peer 192.168.56.10 parent 8080 0 no-query no-digest originserver login=PASS sourcehash name=backend1
+cache_peer 192.168.10.10 parent 8080 0 no-query no-digest originserver login=PASS sourcehash name=backend1
 cache_peer_access backend1 allow backend redir
 
-cache_peer 192.168.56.20 parent 8080 0 no-query no-digest originserver login=PASS sourcehash name=backend2
+cache_peer 192.168.10.20 parent 8080 0 no-query no-digest originserver login=PASS sourcehash name=backend2
 cache_peer_access backend2 allow backend redir
 
-cache_peer 192.168.56.10 parent 8443 0 no-query no-digest originserver ssl sslflags=DONT_VERIFY_PEER login=PASS sourcehash name=backend1_ssl
+cache_peer 192.168.10.10 parent 8443 0 no-query no-digest originserver ssl sslflags=DONT_VERIFY_PEER login=PASS sourcehash name=backend1_ssl
 cache_peer_access backend1_ssl allow backend !redir
 
-cache_peer 192.168.56.20 parent 8443 0 no-query no-digest originserver ssl sslflags=DONT_VERIFY_PEER login=PASS sourcehash name=backend2_ssl
+cache_peer 192.168.10.20 parent 8443 0 no-query no-digest originserver ssl sslflags=DONT_VERIFY_PEER login=PASS sourcehash name=backend2_ssl
 cache_peer_access backend2_ssl allow backend !redir
 
 never_direct allow all
 cache deny all
 memory_pools off
 
-http_port 80 accel defaultsite=192.168.56.30
-https_port 443 accel cert=/etc/ssl/certs/ssl-cert-snakeoil.pem key=/etc/ssl/private/ssl-cert-snakeoil.key defaultsite=192.168.56.30
+http_port 80 accel defaultsite=192.168.10.100
+https_port 443 accel cert=/etc/ssl/certs/ssl-cert-snakeoil.pem key=/etc/ssl/private/ssl-cert-snakeoil.key defaultsite=192.168.10.100
 ```
 
-### `/etc/keepalived/keepalived.conf` (MASTER `lb1`)
+### `/etc/keepalived/keepalived.conf` (MASTER `UbuntuServer1`)
 
 ```conf
 vrrp_script chk_squid {
@@ -442,7 +442,7 @@ vrrp_instance VI_1 {
         auth_pass mypassword
     }
     virtual_ipaddress {
-        192.168.56.30/24
+        192.168.10.100/24
     }
     track_script {
         chk_squid
@@ -450,7 +450,7 @@ vrrp_instance VI_1 {
 }
 ```
 
-### `/etc/keepalived/keepalived.conf` (BACKUP `lb2`)
+### `/etc/keepalived/keepalived.conf` (BACKUP `UbuntuServer2`)
 
 ```conf
 vrrp_script chk_squid {
@@ -471,7 +471,7 @@ vrrp_instance VI_1 {
         auth_pass mypassword
     }
     virtual_ipaddress {
-        192.168.56.30/24
+        192.168.10.100/24
     }
     track_script {
         chk_squid
@@ -489,5 +489,12 @@ You now have a functional HA web cluster on Ubuntu with Squid load balancing to 
 
 **Tags:** ubuntu, linux, high-availability, keepalived, squid, tomcat, reverse-proxy, load‑balancing, vrrp
 
-> 📸 Add screenshots where helpful: `ip -br a` showing VIP on MASTER/BACKUP, `curl` output alternating between NODE‑1/2, and Squid access logs proving load balancing.
+**Desktop View:**
+
+![WhatsApp Image 2025-09-04 at 21 37 14_a469c295](https://github.com/user-attachments/assets/02188f4f-f06f-4be7-9826-69141220381b)
+
+**Mobile View:**
+
+![WhatsApp Image 2025-09-04 at 21 37 14_cd32d03b](https://github.com/user-attachments/assets/c9c2fd9f-1455-45f0-958f-a7ee9fcfbc5a)
+
 
