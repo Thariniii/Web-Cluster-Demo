@@ -4,6 +4,8 @@
 
 A practical, copy‑paste guide to set up a small HA web cluster on Ubuntu. We’ll run two Tomcat backend servers, front them with Squid acting as a reverse‑proxy load balancer, and add Keepalived for failover using a floating Virtual IP (VIP). The result: HTTPS + HTTP, load‑balanced and highly available.
 
+<img width="1200" height="1200" alt="V" src="https://github.com/user-attachments/assets/2ac5f922-048a-410f-abfb-612b3deb8acb" />
+
 ---
 
 ## What you’ll build
